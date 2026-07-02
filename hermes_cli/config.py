@@ -4381,6 +4381,13 @@ def clear_model_endpoint_credentials(
         model_cfg.pop("api_mode", None)
     if clear_base_url:
         model_cfg.pop("base_url", None)
+    # Ensure popped keys are truly absent, not implicitly None.
+    # PyYAML serializes None as integer 0 in some contexts, causing
+    # 'Authorization: Bearer 0' failures on custom providers. (#56535)
+    for key in ["api_key", "api", "api_mode", "base_url"]:
+        if key in model_cfg and model_cfg[key] is None:
+            del model_cfg[key]
+
     return model_cfg
 
 

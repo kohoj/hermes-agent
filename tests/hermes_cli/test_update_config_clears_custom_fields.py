@@ -99,3 +99,31 @@ class TestUpdateConfigForProviderClearsStaleCustomFields:
         _seed_custom_provider_config(api_mode="codex_responses")
         _update_config_for_provider("openrouter", "https://openrouter.ai/api/v1")
         assert "api_mode" not in _read_model_cfg()
+
+    def test_none_values_are_deleted_not_kept(self):
+        """Regression test for #56535: PyYAML serializes None → 0 in some contexts.
+
+        When clear_model_endpoint_credentials() does model_cfg.pop("api_key", None),
+        the key may remain in the dict with value None. PyYAML then writes it as
+        integer 0, causing 'Authorization: Bearer 0' failures on custom providers.
+
+        The fix explicitly deletes keys that have None values after popping.
+        """
+        model_cfg = {
+            "provider": "openrouter",
+            "default": "anthropic/[REDACTED].6",
+            "api_key": "sk-stale",
+            "base_url": None,
+        }
+
+        returned = clear_model_endpoint_credentials(model_cfg, clear_base_url=True)
+
+        assert returned is model_cfg
+        assert "api_key" not in model_cfg
+        assert "base_url" not in model_cfg, (
+            "None value must be deleted, not kept — PyYAML would serialize it as 0"
+        )
+
+        serialized = yaml.safe_dump(model_cfg)
+        assert "base_url" not in serialized
+        assert ": 0" not in serialized, "No None → 0 serialization artifact"
