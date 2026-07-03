@@ -100,6 +100,35 @@ class TestTTYPromptFlow:
             )
         assert len(registered) == 1
 
+    def test_modified_script_requires_reapproval(self, tmp_path):
+        """Allowlisting the command string must not trust changed script bytes."""
+        from hermes_cli import plugins
+
+        script = _write_hook_script(tmp_path)
+        plugins._plugin_manager = plugins.PluginManager()
+
+        with patch("sys.stdin") as mock_stdin, patch("builtins.input", return_value="y"):
+            mock_stdin.isatty.return_value = True
+            shell_hooks.register_from_config(
+                {"hooks": {"on_session_start": [{"command": str(script)}]}},
+                accept_hooks=False,
+            )
+
+        script.write_text("#!/usr/bin/env bash\nprintf '{\"changed\": true}\\n'\n")
+        script.chmod(0o755)
+        shell_hooks.reset_for_tests()
+        plugins._plugin_manager = plugins.PluginManager()
+
+        with patch("sys.stdin") as mock_stdin, patch("builtins.input", return_value="n") as mock_input:
+            mock_stdin.isatty.return_value = True
+            registered = shell_hooks.register_from_config(
+                {"hooks": {"on_session_start": [{"command": str(script)}]}},
+                accept_hooks=False,
+            )
+
+        assert registered == []
+        mock_input.assert_called_once()
+
 
 # ── non-TTY flow ──────────────────────────────────────────────────────────
 
@@ -181,6 +210,7 @@ class TestAllowlistOps:
         assert entry["script_mtime_at_approval"] is not None
         # ISO-8601 Z-suffix
         assert entry["script_mtime_at_approval"].endswith("Z")
+        assert entry["script_sha256_at_approval"] == shell_hooks.script_sha256(str(script))
 
     def test_revoke_removes_entry(self, tmp_path):
         script = _write_hook_script(tmp_path)
@@ -239,6 +269,19 @@ class TestAllowlistOps:
             and e.get("command") == str(script)
         ]
         assert len(matching) == 1
+
+    def test_legacy_script_entry_without_hash_does_not_allow_current_file(self, tmp_path):
+        script = _write_hook_script(tmp_path)
+        shell_hooks.save_allowlist({
+            "approvals": [{
+                "event": "on_session_start",
+                "command": str(script),
+                "approved_at": "2026-01-01T00:00:00Z",
+                "script_mtime_at_approval": shell_hooks.script_mtime_iso(str(script)),
+            }],
+        })
+
+        assert shell_hooks._is_allowlisted("on_session_start", str(script)) is False
 
 
 # ── hooks_auto_accept config parsing ──────────────────────────────────────
@@ -309,4 +352,3 @@ class TestHooksAutoAcceptParsing:
         assert shell_hooks._resolve_effective_accept(
             {"hooks_auto_accept": "false"}, accept_hooks_arg=True,
         ) is True
-

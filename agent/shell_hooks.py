@@ -106,6 +106,7 @@ emitted by each built-in hook site.
 from __future__ import annotations
 
 import difflib
+import hashlib
 import json
 import logging
 import os
@@ -662,13 +663,22 @@ def save_allowlist(data: Dict[str, Any]) -> None:
 
 
 def _is_allowlisted(event: str, command: str) -> bool:
+    current_hash = script_sha256(command)
     data = load_allowlist()
-    return any(
-        isinstance(e, dict)
-        and e.get("event") == event
-        and e.get("command") == command
-        for e in data.get("approvals", [])
-    )
+    for e in data.get("approvals", []):
+        if not (
+            isinstance(e, dict)
+            and e.get("event") == event
+            and e.get("command") == command
+        ):
+            continue
+        approved_hash = e.get("script_sha256_at_approval")
+        if approved_hash is not None:
+            return approved_hash == current_hash
+        if current_hash is not None:
+            return False
+        return True
+    return False
 
 
 @contextmanager
@@ -749,6 +759,7 @@ def _record_approval(event: str, command: str) -> None:
         "command": command,
         "approved_at": _utc_now_iso(),
         "script_mtime_at_approval": script_mtime_iso(command),
+        "script_sha256_at_approval": script_sha256(command),
     }
     with _locked_update_approvals() as data:
         data["approvals"] = [
@@ -867,6 +878,21 @@ def script_mtime_iso(command: str) -> Optional[str]:
         return datetime.fromtimestamp(
             os.path.getmtime(expanded), tz=timezone.utc,
         ).isoformat().replace("+00:00", "Z")
+    except OSError:
+        return None
+
+
+def script_sha256(command: str) -> Optional[str]:
+    """SHA-256 digest of the resolved hook script, or ``None`` if absent."""
+    path = _command_script_path(command)
+    if not path:
+        return None
+    try:
+        h = hashlib.sha256()
+        with open(os.path.expanduser(path), "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
     except OSError:
         return None
 
