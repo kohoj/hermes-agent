@@ -211,6 +211,37 @@ class TestFallbackChainAdvancement:
             assert agent._try_activate_fallback() is True
             assert agent.api_mode == "anthropic_messages"
 
+    def test_explicit_fallback_api_mode_wins_over_url_heuristics(self):
+        """A custom Anthropic-compatible proxy may not use the anthropic
+        provider name, host, or /anthropic suffix. The fallback entry's
+        api_mode is the only durable signal for that transport."""
+        fbs = [
+            {
+                "provider": "custom",
+                "model": "claude-sonnet-4-6",
+                "base_url": "https://proxy.example/v1",
+                "api_key": "fallback-secret",
+                "api_mode": "anthropic_messages",
+            }
+        ]
+        agent = _make_agent(fallback_model=fbs)
+        with (
+            patch(
+                "agent.auxiliary_client.resolve_provider_client",
+                return_value=(
+                    _mock_client(
+                        base_url="https://proxy.example/v1",
+                        api_key="fallback-secret",
+                    ),
+                    "claude-sonnet-4-6",
+                ),
+            ),
+            patch("hermes_cli.model_normalize.normalize_model_for_provider", side_effect=lambda m, p: m),
+        ):
+            assert agent._try_activate_fallback() is True
+            assert agent.api_mode == "anthropic_messages"
+            assert agent._anthropic_base_url == "https://proxy.example/v1"
+
 
 # ── Pool-rotation vs fallback gating (#11314) ────────────────────────────
 

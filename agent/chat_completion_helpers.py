@@ -39,6 +39,12 @@ from utils import base_url_host_matches, base_url_hostname, env_float, env_int
 
 logger = logging.getLogger(__name__)
 _OPENROUTER_PROVIDER_SORT_VALUES = {"throughput", "latency", "price"}
+_FALLBACK_API_MODES = {
+    "chat_completions",
+    "codex_responses",
+    "anthropic_messages",
+    "bedrock_converse",
+}
 
 # When the fallback chain is fully exhausted on a non-rate-limit failure
 # (e.g. every provider returns a non-retryable client error like HTTP 400),
@@ -1300,11 +1306,21 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
                 fb_model, fb_provider, _norm_err,
             )
 
-        # Determine api_mode from provider / base URL / model
+        # Determine api_mode from explicit fallback config first, then infer
+        # from provider / base URL / model like the primary runtime path.
+        fb_explicit_api_mode = (fb.get("api_mode") or "").strip()
         fb_api_mode = "chat_completions"
         fb_base_url = str(fb_client.base_url)
         _fb_is_azure = agent._is_azure_openai_url(fb_base_url)
-        if fb_provider == "openai-codex":
+        if fb_explicit_api_mode and fb_explicit_api_mode not in _FALLBACK_API_MODES:
+            logger.warning(
+                "Ignoring unsupported fallback api_mode %r for %s/%s",
+                fb_explicit_api_mode, fb_provider, fb_model,
+            )
+            fb_explicit_api_mode = ""
+        elif fb_explicit_api_mode:
+            fb_api_mode = fb_explicit_api_mode
+        elif fb_provider == "openai-codex":
             fb_api_mode = "codex_responses"
         elif (
             fb_provider == "anthropic"
